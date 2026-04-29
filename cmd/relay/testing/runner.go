@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"strings"
 
 	"github.com/bluesky-social/indigo/atproto/identity"
 	"github.com/bluesky-social/indigo/cmd/relay/relay"
@@ -19,14 +20,21 @@ import (
 )
 
 type SimpleRelay struct {
-	Relay *relay.Relay
-	Port  int
+	Relay    *relay.Relay
+	Port     int
+	listener net.Listener
 }
 
 func (sr *SimpleRelay) handleSubscribeRepos(w http.ResponseWriter, r *http.Request) {
 	err := sr.Relay.HandleSubscribeRepos(w, r, nil, "0.0.0.0")
 	if err != nil {
 		slog.Error("subscribeRepos", "err", err)
+	}
+}
+
+func (sr *SimpleRelay) Shutdown() {
+	if sr.listener != nil {
+		_ = sr.listener.Close()
 	}
 }
 
@@ -61,8 +69,9 @@ func MustSimpleRelay(dir identity.Directory, tmpd string, lenient bool) *SimpleR
 	port := listener.Addr().(*net.TCPAddr).Port
 
 	sr := SimpleRelay{
-		Relay: r,
-		Port:  port,
+		Relay:    r,
+		Port:     port,
+		listener: listener,
 	}
 
 	mux := http.NewServeMux()
@@ -70,11 +79,8 @@ func MustSimpleRelay(dir identity.Directory, tmpd string, lenient bool) *SimpleR
 
 	slog.Info("starting test relay", "port", port)
 	go func() {
-		defer func() {
-			_ = listener.Close()
-		}()
 		err := http.Serve(listener, mux)
-		if err != nil {
+		if err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
 			slog.Warn("test relay shutting down", "err", err)
 		}
 	}()
@@ -131,6 +137,7 @@ func RunScenario(ctx context.Context, s *Scenario) error {
 	defer p.Shutdown()
 
 	sr := MustSimpleRelay(dir, tmpd, s.Lenient)
+	defer sr.Shutdown()
 
 	err = sr.Relay.SubscribeToHost(ctx, fmt.Sprintf("localhost:%d", hostPort), true, true)
 	if err != nil {
