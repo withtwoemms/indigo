@@ -55,8 +55,21 @@ func (s *Service) handleComAtprotoSyncRequestCrawl(c echo.Context, body *comatpr
 	}
 
 	if err := s.relay.HostChecker.CheckHost(ctx, hostURL); err != nil {
+		// When insecure hosts are allowed and the original hostname had no
+		// explicit scheme (defaulted to HTTPS), retry over plain HTTP before
+		// giving up.  This covers Docker-internal hostnames that only speak
+		// HTTP on the default port.
+		if !noSSL && s.config.AllowInsecureHosts {
+			httpURL := "http://" + hostname
+			if errHTTP := s.relay.HostChecker.CheckHost(ctx, httpURL); errHTTP == nil {
+				noSSL = true
+				hostURL = httpURL
+				goto hostOK
+			}
+		}
 		return c.JSON(http.StatusBadRequest, atclient.ErrorBody{Name: "HostNotFound", Message: fmt.Sprintf("host server unreachable: %s", err)})
 	}
+hostOK:
 
 	// forward on to any sibling instances (note that sometimes is, sometimes isn't an admin request)
 	b, err := json.Marshal(body)
